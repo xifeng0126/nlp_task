@@ -3,19 +3,12 @@ from torch import nn
 
 class SentimentRNN(nn.Module):
     """
-    The RNN model that will be used to perform Sentiment analysis.
+    用于情感分析的RNN模型。
     """
 
     def __init__(self, vocab_size, output_size, embedding_dim, hidden_dim, n_layers, drop_prob):
         """
-        Initialize the model by setting up the layers.
-        Arguments:
-        vocab_size - The size of the vocabulary, i.e., the total number of unique words in the input data.
-        output_size - The size of the output, which is usually set to 1 for binary classification tasks like sentiment analysis.
-        embedding_dim - The dimensionality of the word embeddings. Each word in the input data will be represented by a dense vector of this dimension.
-        hidden_dim - The number of units in the hidden state of the LSTM layer.
-        n_layers - The number of layers in the LSTM.
-        drop_prob - The probability of dropout, which is a regularization technique used to prevent overfitting.
+        初始化模型，设置层。
         """
         super(SentimentRNN, self).__init__()
 
@@ -23,56 +16,52 @@ class SentimentRNN(nn.Module):
         self.n_layers = n_layers
         self.hidden_dim = hidden_dim
 
-        # an embedding layer that maps each word index to its dense vector representation.
-        # this layer is used to learn word embeddings during training.
+        # 嵌入层，将每个单词索引映射到其稠密向量表示。
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
 
-        # an LSTM layer that processes the input sequence of word embeddings
-        # and produces a sequence of hidden states.
+        # LSTM层，处理输入序列的单词嵌入并生成隐藏状态序列。
         self.lstm = nn.LSTM(embedding_dim,
                             hidden_dim,
                             n_layers,
                             dropout=0.5,
                             batch_first=True)
 
-        # a dropout layer that randomly sets elements of the input to zero
-        # with probability drop_prob.
-        # this layer helps in preventing overfitting.
+        # Dropout层，随机将输入的元素置为零以防止过拟合。
         self.dropout = nn.Dropout(p=drop_prob)
 
-        # linear and sigmoid layers
+        # 线性层和sigmoid层
         self.fc = nn.Linear(hidden_dim, output_size)
         self.sig = nn.Sigmoid()
 
     def forward(self, x, hidden):
         """
-        Perform a forward pass of our model on some input and hidden state.
+        执行模型的前向传播。
         """
-        # compute the word embeddings for the input sequence.
+        # 计算输入序列的单词嵌入。
         batch_size = x.size(0)
         embeds = self.embedding(x)
 
-        # pass the embeddings through the LSTM layer to get the LSTM outputs and the updated hidden state.
+        # 通过LSTM层传递嵌入以获取LSTM输出和更新的隐藏状态。
         lstm_out, hidden = self.lstm(embeds, hidden)
         lstm_out = lstm_out.contiguous().view(-1, self.hidden_dim)
 
-        # apply dropout to the reshaped LSTM outputs.
+        # 对重塑的LSTM输出应用dropout。
         out = self.dropout(lstm_out)
 
-        # pass the output through the fully connected layer.
+        # 通过全连接层传递输出。
         out = self.fc(out)
 
-        # apply the sigmoid activation function to squash the output between 0 and 1.
+        # 应用sigmoid激活函数将输出压缩到0和1之间。
         out = self.sig(out)
         out = out.view(batch_size, -1)
 
-        # extract the last five elements from each sequence in the batch
+        # 从每个序列中提取最后五个元素
         out = out[:, -5:]
         return out, hidden
 
     def init_hidden(self, batch_size, device):
         """
-        Initializes hidden state
+        初始化隐藏状态。
         """
         weight = next(self.parameters()).data
         hidden = (weight.new(self.n_layers, batch_size, self.hidden_dim).zero_().to(device),

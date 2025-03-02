@@ -20,7 +20,6 @@ class Config():
     n_layers = 2  # LSTM的层数
     n_classes = 5  # 评分的类别数
     dropout = 0.5  # dropout的概率，防止过拟合
-    checkpoint = "siebert/sentiment-roberta-large-english"
     # 测试
     test_batch_size = 4
     model_path = '.\\SentimentRNN.pt'

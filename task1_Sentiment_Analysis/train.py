@@ -9,45 +9,43 @@ from task1_Sentiment_Analysis.data_process import load_data
 
 def train_loop(model, optimizer, criterion, train_loader, clip_value, device, batch_size=Config.batch_size):
     """
-    Train model
+    训练模型
     """
     running_loss = 0
     model.train()
 
-    # returns the initial hidden state for the LSTM layers
+    # 返回LSTM层的初始隐藏状态
     h = model.init_hidden(batch_size, device)
 
     for seq, targets in train_loader:
-        # move data to device
+        # 将数据移动到设备
         seq = seq.to(device)
         targets = targets.to(device)
 
-        # convert the elements of the hidden state tuple h to tensors with the same device as the input data.
+        # 将隐藏状态元组h的元素转换为与输入数据相同设备的张量
         h = tuple([each.data for each in h])
 
-        # perform a forward pass through the model.
-        # returns the model's output (out) and the updated hidden state (h).
+        # 进行模型的前向传播
         out, h = model.forward(seq, h)
 
-        # calculate the loss between the predicted output and the target values
+        # 计算预测输出与目标值之间的损失
         loss = criterion(out, targets.float())
         running_loss += loss.item() * seq.shape[0]
 
-        # reset the gradients of the model's parameters
+        # 重置模型参数的梯度
         optimizer.zero_grad()
-
-        # compute the gradients of the loss with respect to the model's parameters
+        # 计算损失相对于模型参数的梯度
         loss.backward()
         if clip_value:
-            # clip the gradients to prevent them from exploding
+            # 防止梯度爆炸
             nn.utils.clip_grad_norm_(model.parameters(), clip_value)
-
-        # update the model's parameters
+        # 更新模型参数
         optimizer.step()
+
     running_loss /= len(train_loader.sampler)
     return running_loss
 
-
+# 将预测结果（概率）转换为one-hot编码
 def get_prediction(t):
     max_indices = torch.argmax(t, dim=1)
     new = torch.zeros_like(t)
@@ -57,35 +55,34 @@ def get_prediction(t):
 
 def eval_loop(model, criterion, eval_loader, device, batch_size=Config.batch_size, ignore_index=None):
     """
-    Evaluate model
+    评估模型
     """
 
-    # returns the initial hidden state for the LSTM layers
+    # 返回LSTM层的初始隐藏状态
     val_h = model.init_hidden(batch_size, device)
     val_loss = 0
     model.eval()
     accuracy = []
     for seq, targets in eval_loader:
-        # convert the elements of the hidden state tuple val_h to tensors with the same device as the input data.
+        # 将隐藏状态元组val_h的元素转换为与输入数据相同设备的张量
         val_h = tuple([each.data for each in val_h])
 
-        # move data to device
+        # 将数据移动到设备
         seq = seq.to(device)
         targets = targets.to(device)
 
-        # perform a forward pass through the model.
-        # returns the model's output (out) and the updated hidden state (val_h).
+        # 进行模型的前向传播
         out, val_h = model(seq, val_h)
 
-        # calculate the loss
+        # 计算损失
         loss = criterion(out, targets.float())
         val_loss += loss.item() * seq.shape[0]
 
-        # convert the model's output
+        # 转换模型输出
         predicted = get_prediction(out).flatten().cpu().numpy()
         labels = targets.view(-1).cpu().numpy()
 
-        # calculate the accuracy score between the predicted and target values
+        # 计算预测值与目标值之间的准确率
         accuracy.append(accuracy_score(labels, predicted))
 
     acc = sum(accuracy) / len(accuracy)
@@ -100,22 +97,22 @@ def train_model(model, optimizer, criterion, train_loader, valid_loader,
           device=Config.device,
           valid_loss_min=np.inf):
     for e in range(num_epochs):
-        # train for epoch
+        # 训练一个epoch
         train_loss = train_loop(model, optimizer, criterion, train_loader, clip_value, device)
 
         if (e + 1) % eval_every == 0:
 
-            # evaluate on validation set
+            # 在验证集上评估
             metrics = eval_loop(model, criterion, valid_loader, device)
 
-            # show progress
+            # 显示进度
             print_string = f'Epoch: {e + 1} '
             print_string += f'TrainLoss: {train_loss:.5f} '
             print_string += f'ValidLoss: {metrics["loss"]:.5f} '
             print_string += f'ACC: {metrics["accuracy"]:.5f} '
             print(print_string)
 
-            # save the model
+            # 更优时保存模型
             if metrics["loss"] <= valid_loss_min:
                 torch.save(model.state_dict(), Config.model_path)
                 valid_loss_min = metrics["loss"]
