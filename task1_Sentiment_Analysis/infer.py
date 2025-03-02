@@ -3,7 +3,7 @@ import torch
 from task1_Sentiment_Analysis.Config import Config
 from task1_Sentiment_Analysis.data_process import load_data
 from task1_Sentiment_Analysis.train import get_prediction
-from task1_Sentiment_Analysis.train import SentimentRNN
+from task1_Sentiment_Analysis.model import SentimentRNN
 
 
 @torch.no_grad()
@@ -30,12 +30,20 @@ def prediction(model, test_loader, test_zero_idx, device=Config.device, batch_si
 
 def infer():
     # 加载数据
-    _, _, test_loader, encode_voc, test_zero_idx = load_data(Config.train_path, Config.test_path)
+    X_train, y_train, test_loader, word_to_idx, test_zero_idx, pretrained_embeddings = load_data(
+        Config.train_path, Config.test_path, embedding_dim=Config.embedding_dim)
 
     # 加载模型
-    vocab_size = len(encode_voc) + 1
-    model = SentimentRNN(vocab_size, Config.output_size, Config.embedding_dim, Config.hidden_dim, Config.n_layers,
-                         Config.dropout)
+    vocab_size = len(word_to_idx) + 1
+    model = SentimentRNN(
+        vocab_size, 
+        Config.output_size, 
+        Config.embedding_dim, 
+        Config.hidden_dim, 
+        Config.n_layers,
+        Config.dropout,
+        pretrained_embeddings=None  # 推断时不需要预训练词向量
+    )
     model.load_state_dict(torch.load(Config.model_path))
     model = model.to(Config.device)
 

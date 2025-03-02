@@ -5,9 +5,11 @@ import pandas as pd
 import torch
 from nltk import PorterStemmer
 from nltk.corpus import stopwords
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
+import os
+import torchtext
 
 from task1_Sentiment_Analysis.Config import Config
 
@@ -52,11 +54,6 @@ def encode_data(data, vocab_to_int):
     return reviews_int
 
 
-# encode_voc = encode_words(train_data_pp + test_data_pp)
-# train_data_int = encode_data(train_data_pp, encode_voc)
-# test_data_int = encode_data(test_data_pp, encode_voc)
-# print("Example of encoded train data: ", train_data_int[0])
-# print("Example of encoded test data: ", test_data_int[0])
 
 
 # 把目标向量转换成one-hot编码
@@ -64,14 +61,6 @@ def to_categorical(y, num_classes):
     return np.eye(num_classes, dtype='uint8')[y]
 
 
-# y_target = to_categorical(train_data['Sentiment'], Config.n_classes)  # 将评分转换成one-hot编码
-#
-# train_reviews_lens = Counter([len(x) for x in train_data_int])
-#
-# # 从训练集中删除长度为0的评论
-# non_zero_idx = [ii for ii, review in enumerate(train_data_int) if len(review) != 0]
-# train_data_int = [train_data_int[ii] for ii in non_zero_idx]
-# y_target = np.array([y_target[ii] for ii in non_zero_idx])
 
 
 # 填充或截断评论到固定序列长度
@@ -84,52 +73,129 @@ def pad_features(reviews_int, seq_length):
             continue
     return features
 
-def load_data(train_path, test_path):
-    # 加载数据并返回处理后的数据集
-    train_data = pd.read_csv(train_path, sep='\t')
-    test_data = pd.read_csv(test_path, sep='\t')
 
-    train_data_pp = pre_process_data(train_data)
-    test_data_pp = pre_process_data(test_data)
+def load_glove_embeddings(word_to_idx, embedding_dim=100):
+    """
+    加载GloVe预训练词向量
+    """
+    # 下载GloVe词向量（如果尚未下载）
+    glove_path = '.vector_cache'
+    if not os.path.exists(glove_path):
+        os.makedirs(glove_path)
+    
+    # 使用torchtext加载GloVe词向量
+    glove = torchtext.vocab.GloVe(name='6B', dim=embedding_dim, cache=glove_path)
+    
+    # 初始化嵌入矩阵
+    embeddings = torch.zeros((len(word_to_idx) + 1, embedding_dim))
+    
+    # 填充嵌入矩阵
+    for word, idx in word_to_idx.items():
+        if word in glove.stoi:
+            embeddings[idx] = glove.vectors[glove.stoi[word]]
+        else:
+            # 对于不在GloVe中的词，使用随机初始化
+            embeddings[idx] = torch.randn(embedding_dim)
+    
+    return embeddings
 
-    encode_voc = encode_words(train_data_pp + test_data_pp)
-    train_data_int = encode_data(train_data_pp, encode_voc)
-    test_data_int = encode_data(test_data_pp, encode_voc)
 
-    y_target = to_categorical(train_data['Sentiment'], Config.n_classes)
+def load_data(train_path, test_path, batch_size=50, test_batch_size=500, val_size=0.1, max_seq_len=200, embedding_dim=100):
+    """
+    加载并预处理数据
+    """
+    # 读取训练数据
+    train_df = pd.read_csv(train_path, sep='\t')
+    
+    # 读取测试数据
+    test_df = pd.read_csv(test_path, sep='\t')
+    
+    # 构建词汇表
+    word_counter = Counter()
+    for phrase in train_df['Phrase'].values:
+        word_counter.update(phrase.lower().split())
+    
+    # 保留出现频率最高的词
+    vocab_size = 10000
+    common_words = [word for word, count in word_counter.most_common(vocab_size-1)]
+    
+    # 创建词到索引的映射
+    word_to_idx = {word: i+1 for i, word in enumerate(common_words)}
+    
+    # 处理训练数据
+    X_train = []
+    y_train = []
+    for phrase, sentiment in zip(train_df['Phrase'].values, train_df['Sentiment'].values):
+        # 将短语转换为索引序列
+        indices = [word_to_idx.get(word.lower(), 0) for word in phrase.split()]
+        # 填充或截断序列
+        if len(indices) < max_seq_len:
+            indices = indices + [0] * (max_seq_len - len(indices))
+        else:
+            indices = indices[:max_seq_len]
+        X_train.append(indices)
+        
+        # 将情感标签转换为one-hot编码
+        sentiment_one_hot = [0] * 5
+        sentiment_one_hot[sentiment] = 1
+        y_train.append(sentiment_one_hot)
+    
+    X_train = torch.tensor(X_train, dtype=torch.long)
+    y_train = torch.tensor(y_train, dtype=torch.float)
+    
+    # 处理测试数据
+    X_test = []
+    test_ids = []
+    test_zero_idx = []
+    
+    for phrase_id, phrase in zip(test_df['PhraseId'].values, test_df['Phrase'].values):
+        # 将短语转换为索引序列
+        indices = [word_to_idx.get(word.lower(), 0) for word in phrase.split()]
+        # 填充或截断序列
+        if len(indices) < max_seq_len:
+            indices = indices + [0] * (max_seq_len - len(indices))
+        else:
+            indices = indices[:max_seq_len]
+        X_test.append(indices)
+        test_ids.append(phrase_id)
+        
+        # 记录空短语的ID
+        if len(phrase.strip()) == 0:
+            test_zero_idx.append(phrase_id)
+    
+    X_test = torch.tensor(X_test, dtype=torch.long)
+    test_ids = torch.tensor(test_ids, dtype=torch.long)
+    
+    # 创建测试数据加载器
+    test_data = TensorDataset(X_test, test_ids)
+    test_loader = DataLoader(test_data, batch_size=test_batch_size, shuffle=False)
+    
+    # 加载GloVe词向量
+    pretrained_embeddings = load_glove_embeddings(word_to_idx, embedding_dim)
+    
+    return X_train, y_train, test_loader, word_to_idx, test_zero_idx, pretrained_embeddings
 
-    # 记录测试集中长度为0的评论
-    test_zero_idx = [test_data.iloc[ii]['PhraseId'] for ii, review in enumerate(test_data_int) if len(review) == 0]
 
-    # 删除长度为0的评论
-    non_zero_idx = [ii for ii, review in enumerate(train_data_int) if len(review) != 0]
-    train_data_int = [train_data_int[ii] for ii in non_zero_idx]
-    y_target = np.array([y_target[ii] for ii in non_zero_idx])
-
-    train_features = pad_features(train_data_int, max(Counter([len(x) for x in train_data_int])))
-    X_test = pad_features(test_data_int, max(Counter([len(x) for x in train_data_int])))
-
-    # 分割数据集
-    X_train, X_val, y_train, y_val = train_test_split(train_features, y_target, test_size=0.2)
-
-    # 调整数据集大小
-    train_size = X_train.shape[0] - X_train.shape[0] % Config.batch_size
-    val_size = X_val.shape[0] - X_val.shape[0] % Config.batch_size
-    X_train = X_train[:train_size]
-    X_val = X_val[:val_size]
-    y_train = y_train[:train_size]
-    y_val = y_val[:val_size]
-
-    # 提取测试数据的唯一标识符
-    ids_test = np.array([t['PhraseId'] for ii, t in test_data.iterrows()])
-
-    # 创建 DataLoader
-    train_data = TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train))
-    valid_data = TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val))
-    test_data = TensorDataset(torch.from_numpy(X_test), torch.from_numpy(ids_test))
-
-    train_loader = DataLoader(train_data, shuffle=True, batch_size=Config.batch_size)
-    valid_loader = DataLoader(valid_data, shuffle=True, batch_size=Config.batch_size)
-    test_loader = DataLoader(test_data, batch_size=Config.test_batch_size)
-
-    return train_loader, valid_loader, test_loader, encode_voc, test_zero_idx
+def create_kfold_loaders(X, y, n_splits=5, batch_size=50):
+    """
+    创建K折交叉验证的数据加载器
+    """
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    fold_loaders = []
+    
+    for train_idx, val_idx in kf.split(X):
+        # 分割数据
+        X_train_fold, X_val_fold = X[train_idx], X[val_idx]
+        y_train_fold, y_val_fold = y[train_idx], y[val_idx]
+        
+        # 创建数据集
+        train_data = TensorDataset(X_train_fold, y_train_fold)
+        val_data = TensorDataset(X_val_fold, y_val_fold)
+        
+        # 创建数据加载器
+        train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+        
+        fold_loaders.append((train_loader, val_loader))
+    
+    return fold_loaders
