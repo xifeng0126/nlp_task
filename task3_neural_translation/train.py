@@ -1,55 +1,148 @@
-from io import open
-import unicodedata
-import re
 import random
-
 import torch
 import torch.nn as nn
 from torch import optim
-import torch.nn.functional as F
+
 
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler
+from task3_neural_translation.processes_data import MAX_LENGTH, SOS_token, EOS_token, input_lang, output_lang, \
+    prepareData, pairs
+from task3_neural_translation.util import *
+from task3_neural_translation.model import EncoderRNN, AttnDecoderRNN
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 字符编码
+def indexesFromSentence(lang, sentence):
+    return [lang.word2index[word] for word in sentence.split(' ')]
 
-SOS_token = 0
-EOS_token = 1
+def tensorFromSentence(lang, sentence):
+    indexes = indexesFromSentence(lang, sentence)
+    indexes.append(EOS_token)
+    return torch.tensor(indexes, dtype=torch.long, device=device).view(1, -1)
 
-class Lang:
-    def __init__(self, name):
-        self.name = name
-        self.word2index = {}
-        self.word2count = {}
-        self.index2word = {0: "SOS", 1: "EOS"}
-        self.n_words = 2  # Count SOS and EOS
+def tensorsFromPair(pair):
+    input_tensor = tensorFromSentence(input_lang, pair[0])
+    target_tensor = tensorFromSentence(output_lang, pair[1])
+    return (input_tensor, target_tensor)
 
-    def addSentence(self, sentence):
-        for word in sentence.split(' '):
-            self.addWord(word)
+def get_dataloader(batch_size):
+    input_lang, output_lang, pairs = prepareData('eng', 'fra', True)
 
-    def addWord(self, word):
-        if word not in self.word2index:
-            self.word2index[word] = self.n_words
-            self.word2count[word] = 1
-            self.index2word[self.n_words] = word
-            self.n_words += 1
-        else:
-            self.word2count[word] += 1
+    n = len(pairs)
+    input_ids = np.zeros((n, MAX_LENGTH), dtype=np.int32)
+    target_ids = np.zeros((n, MAX_LENGTH), dtype=np.int32)
 
-# 将unicode字符转换为ascii
-def unicodeToAscii(s):
-    return ''.join(
-        c for c in unicodedata.normalize('NFD', s)
-        if unicodedata.category(c) != 'Mn'
-    )
+    for idx, (inp, tgt) in enumerate(pairs):
+        inp_ids = indexesFromSentence(input_lang, inp)
+        tgt_ids = indexesFromSentence(output_lang, tgt)
+        inp_ids.append(EOS_token)
+        tgt_ids.append(EOS_token)
+        input_ids[idx, :len(inp_ids)] = inp_ids
+        target_ids[idx, :len(tgt_ids)] = tgt_ids
 
-# 小写，修剪，并删除非字母字符
-def normalizeString(s):
-    s = unicodeToAscii(s.lower().strip())
-    s = re.sub(r"([.!?])", r" \1", s)
-    s = re.sub(r"[^a-zA-Z!?]+", r" ", s)
-    return s.strip()
+    train_data = TensorDataset(torch.LongTensor(input_ids).to(device),
+                               torch.LongTensor(target_ids).to(device))
 
+    train_sampler = RandomSampler(train_data)
+    train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=batch_size)
+    return input_lang, output_lang, train_dataloader
+
+def train_epoch(dataloader, encoder, decoder, encoder_optimizer,
+          decoder_optimizer, criterion):
+
+    total_loss = 0
+    for data in dataloader:
+        input_tensor, target_tensor = data
+
+        encoder_optimizer.zero_grad()
+        decoder_optimizer.zero_grad()
+
+        encoder_outputs, encoder_hidden = encoder(input_tensor)
+        decoder_outputs, _, _ = decoder(encoder_outputs, encoder_hidden, target_tensor)
+
+        loss = criterion(
+            decoder_outputs.view(-1, decoder_outputs.size(-1)),
+            target_tensor.view(-1)
+        )
+        loss.backward()
+
+        encoder_optimizer.step()
+        decoder_optimizer.step()
+
+        total_loss += loss.item()
+
+    return total_loss / len(dataloader)
+
+def train(train_dataloader, encoder, decoder, n_epochs, learning_rate=0.001,
+               print_every=100, plot_every=100):
+    start = time.time()
+    plot_losses = []
+    print_loss_total = 0  # Reset every print_every
+    plot_loss_total = 0  # Reset every plot_every
+
+    encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
+    decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate)
+    criterion = nn.NLLLoss()
+
+    for epoch in range(1, n_epochs + 1):
+        loss = train_epoch(train_dataloader, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion)
+        print_loss_total += loss
+        plot_loss_total += loss
+
+        if epoch % print_every == 0:
+            print_loss_avg = print_loss_total / print_every
+            print_loss_total = 0
+            print('%s (%d %d%%) %.4f' % (timeSince(start, epoch / n_epochs),
+                                        epoch, epoch / n_epochs * 100, print_loss_avg))
+
+        if epoch % plot_every == 0:
+            plot_loss_avg = plot_loss_total / plot_every
+            plot_losses.append(plot_loss_avg)
+            plot_loss_total = 0
+
+    # 保存模型
+    torch.save(encoder.state_dict(), 'encoder.pth')
+    torch.save(decoder.state_dict(), 'decoder.pth')
+    print('Model saved.')
+
+    showPlot(plot_losses)
+
+def evaluate(encoder, decoder, sentence, input_lang, output_lang):
+    with torch.no_grad():
+        input_tensor = tensorFromSentence(input_lang, sentence)
+
+        encoder_outputs, encoder_hidden = encoder(input_tensor)
+        decoder_outputs, decoder_hidden, decoder_attn = decoder(encoder_outputs, encoder_hidden)
+
+        _, topi = decoder_outputs.topk(1)
+        decoded_ids = topi.squeeze()
+
+        decoded_words = []
+        for idx in decoded_ids:
+            if idx.item() == EOS_token:
+                decoded_words.append('<EOS>')
+                break
+            decoded_words.append(output_lang.index2word[idx.item()])
+    return decoded_words, decoder_attn
+
+def evaluateRandomly(encoder, decoder, n=10):
+    for i in range(n):
+        pair = random.choice(pairs)
+        print('>', pair[0])
+        print('=', pair[1])
+        output_words, _ = evaluate(encoder, decoder, pair[0], input_lang, output_lang)
+        output_sentence = ' '.join(output_words)
+        print('<', output_sentence)
+        print('')
+
+if __name__ == '__main__':
+    hidden_size = 128
+    batch_size = 32
+    input_lang, output_lang, train_dataloader = get_dataloader(batch_size)
+    encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
+    decoder = AttnDecoderRNN(hidden_size, output_lang.n_words).to(device)
+    train(train_dataloader, encoder, decoder, 60, print_every=5, plot_every=5)
+    encoder.eval()
+    decoder.eval()
+    evaluateRandomly(encoder, decoder)
