@@ -3,15 +3,15 @@ from torch import nn
 from torch.nn import functional as F
 
 
-from task3_neural_translation.processes_data import MAX_LENGTH, SOS_token
+from task3_neural_translation.config import Config
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = Config.DEVICE
 
 # seq2seq 网络的编码器是一个 RNN，
 # 对于每个输入单词，编码器输出一个向量和一个隐藏状态，并使用该隐藏状态处理下一个输入单词。
 class EncoderRNN(nn.Module):
-    def __init__(self, input_size, hidden_size, dropout_p=0.1):
+    def __init__(self, input_size, hidden_size, dropout_p=Config.DROPOUT):
         super(EncoderRNN, self).__init__()
         self.hidden_size = hidden_size
 
@@ -34,12 +34,12 @@ class DecoderRNN(nn.Module):
     def forward(self, encoder_outputs, encoder_hidden, target_tensor=None):
         # 初始化输入为 SOS_token（字符串开始标记） 隐藏状态为编码器的最后一个隐藏状态（上下文变量）
         batch_size = encoder_outputs.size(0)
-        decoder_input = torch.empty(batch_size, 1, dtype=torch.long, device=device).fill_(SOS_token)
+        decoder_input = torch.empty(batch_size, 1, dtype=torch.long, device=device).fill_(Config.SOS_TOKEN)
         decoder_hidden = encoder_hidden
         decoder_outputs = []  #存储每个时间步的解码器输出。
 
         # 逐步生成输出序列
-        for i in range(MAX_LENGTH):
+        for i in range(Config.MAX_LENGTH):
             decoder_output, decoder_hidden  = self.forward_step(decoder_input, decoder_hidden)
             decoder_outputs.append(decoder_output)
 
@@ -83,7 +83,7 @@ class BahdanauAttention(nn.Module):
         return context, weights
 
 class AttnDecoderRNN(nn.Module):
-    def __init__(self, hidden_size, output_size, dropout_p=0.1):
+    def __init__(self, hidden_size, output_size, dropout_p=Config.DROPOUT):
         super(AttnDecoderRNN, self).__init__()
         self.embedding = nn.Embedding(output_size, hidden_size)
         self.attention = BahdanauAttention(hidden_size)
@@ -93,12 +93,12 @@ class AttnDecoderRNN(nn.Module):
 
     def forward(self, encoder_outputs, encoder_hidden, target_tensor=None):
         batch_size = encoder_outputs.size(0)
-        decoder_input = torch.empty(batch_size, 1, dtype=torch.long, device=device).fill_(SOS_token)
+        decoder_input = torch.empty(batch_size, 1, dtype=torch.long, device=device).fill_(Config.SOS_TOKEN)
         decoder_hidden = encoder_hidden
         decoder_outputs = []
         attentions = []
 
-        for i in range(MAX_LENGTH):
+        for i in range(Config.MAX_LENGTH):
             decoder_output, decoder_hidden, attn_weights = self.forward_step(
                 decoder_input, decoder_hidden, encoder_outputs
             )

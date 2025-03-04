@@ -10,8 +10,9 @@ from task3_neural_translation.processes_data import MAX_LENGTH, SOS_token, EOS_t
     prepareData, pairs
 from task3_neural_translation.util import *
 from task3_neural_translation.model import EncoderRNN, AttnDecoderRNN
+from task3_neural_translation.config import Config
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = Config.DEVICE
 
 def indexesFromSentence(lang, sentence):
     return [lang.word2index[word] for word in sentence.split(' ')]
@@ -26,7 +27,7 @@ def tensorsFromPair(pair):
     target_tensor = tensorFromSentence(output_lang, pair[1])
     return (input_tensor, target_tensor)
 
-def get_dataloader(batch_size):
+def get_dataloader(batch_size=Config.BATCH_SIZE):
     input_lang, output_lang, pairs = prepareData('eng', 'fra', True)
 
     n = len(pairs)
@@ -74,8 +75,10 @@ def train_epoch(dataloader, encoder, decoder, encoder_optimizer,
 
     return total_loss / len(dataloader)
 
-def train(train_dataloader, encoder, decoder, n_epochs, learning_rate=0.001,
-               print_every=100, plot_every=100):
+def train(train_dataloader, encoder, decoder, n_epochs=Config.N_EPOCHS, 
+          learning_rate=Config.LEARNING_RATE,
+          print_every=Config.PRINT_EVERY, 
+          plot_every=Config.PLOT_EVERY):
     start = time.time()
     plot_losses = []
     print_loss_total = 0  # Reset every print_every
@@ -137,12 +140,15 @@ def evaluateRandomly(encoder, decoder, n=10):
         print('')
 
 if __name__ == '__main__':
-    hidden_size = 128
-    batch_size = 32
+    hidden_size = Config.HIDDEN_SIZE
+    batch_size = Config.BATCH_SIZE
+    
     input_lang, output_lang, train_dataloader = get_dataloader(batch_size)
     encoder = EncoderRNN(input_lang.n_words, hidden_size).to(device)
     decoder = AttnDecoderRNN(hidden_size, output_lang.n_words).to(device)
-    train(train_dataloader, encoder, decoder, 60, print_every=5, plot_every=5)
+    
+    train(train_dataloader, encoder, decoder)
+    
     encoder.eval()
     decoder.eval()
     evaluateRandomly(encoder, decoder)

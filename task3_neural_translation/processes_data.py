@@ -5,12 +5,15 @@ import random
 
 import torch
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from task3_neural_translation.config import Config
+
+device = Config.DEVICE
 
 # 字符编码
 
-SOS_token = 0
-EOS_token = 1
+SOS_token = Config.SOS_TOKEN
+EOS_token = Config.EOS_TOKEN
+MAX_LENGTH = Config.MAX_LENGTH
 
 class Lang:
     def __init__(self, name):
@@ -70,21 +73,10 @@ def readLangs(lang1, lang2, reverse=False):
     return input_lang, output_lang, pairs
 
 # 过滤句子对
-MAX_LENGTH = 10
-
-eng_prefixes = (
-    "i am ", "i m ",
-    "he is", "he s ",
-    "she is", "she s ",
-    "you are", "you re ",
-    "we are", "we re ",
-    "they are", "they re "
-)
-
 def filterPair(p):
-    return len(p[0].split(' ')) < MAX_LENGTH and \
-        len(p[1].split(' ')) < MAX_LENGTH and \
-        p[1].startswith(eng_prefixes)
+    return len(p[0].split(' ')) < Config.MAX_LENGTH and \
+        len(p[1].split(' ')) < Config.MAX_LENGTH and \
+        p[1].startswith(Config.ENG_PREFIXES)
 
 
 def filterPairs(pairs):
@@ -109,5 +101,6 @@ def prepareData(lang1, lang2, reverse=False):
     print(output_lang.name, output_lang.n_words)
     return input_lang, output_lang, pairs
 
-input_lang, output_lang, pairs = prepareData('eng', 'fra', True)
-print(random.choice(pairs))
+
+# input_lang, output_lang, pairs = prepareData('eng', 'fra', True)
+# print(random.choice(pairs))
